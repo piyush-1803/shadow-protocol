@@ -1,0 +1,37 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {act,advance,player,publicSnapshot,zoneRadius} from '../lib/game/engine';
+import {validateArena,validateFix,inside,metres,confidence,approximate,smooth} from '../lib/game/geo';
+import {defaults,type Game,type Fix} from '../lib/game/types';
+const now=1800000000000;
+const fix=(extra:Partial<Fix>={}):Fix=>({lat:11.3215,lng:75.9345,accuracy:5,timestamp:now,receivedAt:now,speed:null,heading:null,...extra});
+function game():Game{return {id:'room',code:'ABCDEFGH',hostId:'a',name:'Test fixture',arena:{center:[75.9345,11.3215],radius:300,boundary:[],exclusions:[],approved:true},settings:{...defaults},players:[player('a','Alpha'),player('b','Bravo')],phase:'lobby',startedAt:0,endsAt:0,pausedAt:0,lastTick:now,nextRadar:0,radar:[],tags:[],zone:{from:300,to:300,start:0,end:0,step:0},zoneApproved:false,winner:null,events:[],processed:[]}}
+function running(){const g=game();g.phase='hunt';g.startedAt=now-60000;g.endsAt=now+1200000;g.nextRadar=now+180000;g.players[0].role='hunter';g.players[1].role='shadow';return g}
+const fixes={a:fix(),b:fix({lng:75.93452})};
+test('distance is geodesic, not degree subtraction',()=>assert.ok(metres([0,0],[0,.001])>110));
+test('arena rejects invalid bounds and missing approval',()=>{const a=game().arena;assert.throws(()=>validateArena({...a,radius:99}));assert.throws(()=>validateArena({...a,approved:false}));assert.throws(()=>validateArena({...a,center:[NaN,0]}));validateArena(a)});
+test('arena rejects a hazard inside the playable circle',()=>{const a=game().arena;a.exclusions=[[[75.9344,11.3214],[75.9346,11.3214],[75.9346,11.3216],[75.9344,11.3214]]];assert.throws(()=>validateArena(a),/exclusion/)});
+test('boundary must contain entire circle',()=>{const a=game().arena;a.boundary=[[75.9344,11.3214],[75.9346,11.3214],[75.9346,11.3216],[75.9344,11.3214]];assert.throws(()=>validateArena(a),/entire arena/)});
+test('point containment handles outside arena',()=>{assert.ok(inside(game().arena,[75.9345,11.3215]));assert.ok(!inside(game().arena,[76,11]))});
+test('confidence thresholds include uncertainty',()=>assert.deepEqual([10,25,50,51].map(confidence),['High','Medium','Low','Unreliable']));
+test('stale, future, and repeated samples rejected',()=>{assert.throws(()=>validateFix(fix({timestamp:now-16000}),now));assert.throws(()=>validateFix(fix({timestamp:now+6000}),now));assert.throws(()=>validateFix(fix(),now,fix()));});
+test('GPS jumps flagged, not elimination',()=>{const f=validateFix(fix({lng:76,timestamp:now+3000}),now+3000,fix());assert.ok(f.flag);});
+test('smoothing never bridges a large jump',()=>{const f=fix({lng:76});assert.deepEqual(smooth(fix(),f),f)});
+test('host permission enforcement',()=>assert.throws(()=>act(game(),'b','start',{},fixes,now),/host/));
+test('readiness needs reliable GPS inside arena',()=>{assert.throws(()=>act(game(),'a','ready',{ready:true},{a:fix({accuracy:100})},now));assert.throws(()=>act(game(),'a','ready',{ready:true},{a:fix({lng:76})},now));});
+test('all ready yields one random hunter and one shadow',()=>{const g=game();g.players.forEach(p=>p.ready=true);act(g,'a','start',{},fixes,now);assert.equal(g.phase,'headstart');assert.equal(g.players.filter(p=>p.role==='hunter').length,1);assert.equal(g.players.filter(p=>p.role==='shadow').length,1);assert.equal(g.endsAt,now+1260000)});
+test('start rejects stale member even if ready',()=>{const g=game();g.players.forEach(p=>p.ready=true);assert.throws(()=>act(g,'a','start',{},fixes,now+20000))});
+test('headstart prevents tagging',()=>{const g=running();g.phase='headstart';assert.throws(()=>act(g,'a','tag',{target:'b'},fixes,now))});
+test('radar never emits exact coordinates and expires',()=>{const g=running();g.nextRadar=now;advance(g,fixes,now);assert.equal(g.radar.length,2);for(const s of g.radar){assert.ok(s.radius>=50);assert.notDeepEqual(s.center,[fixes.a.lng,fixes.a.lat]);assert.ok(s.expiresAt===now+12000)}advance(g,{},now+12001);assert.equal(g.radar.length,0)});
+test('stale locations and ghosted players excluded from radar',()=>{const g=running();g.nextRadar=now;g.players[1].ghostUntil=now+30000;advance(g,{a:fix({receivedAt:now-20000}),b:fix()},now);assert.equal(g.radar.length,0)});
+test('approximation uncertainty contains true fix plus reported uncertainty',()=>{const f=fix();const r=approximate(f,()=>.5);assert.ok(metres([f.lng,f.lat],r.center)+f.accuracy<=r.radius)});
+test('zone freezes without approval and shrinks gradually within previous zone',()=>{const g=running();g.startedAt=now-600000;advance(g,fixes,now);assert.equal(zoneRadius(g,now),300);act(g,'a','approveZone',{},fixes,now);advance(g,fixes,now);assert.equal(zoneRadius(g,now),300);assert.equal(zoneRadius(g,now+30000),258);assert.equal(zoneRadius(g,now+60000),216);assert.equal(g.zoneApproved,false)});
+test('GPS outage never eliminates',()=>{const g=running();advance(g,{},now+90000);assert.equal(g.players[1].status,'active')});
+test('tag requires mutual confirmation, blocks spam and spoofed responder',()=>{const g=running();act(g,'a','tag',{target:'b'},fixes,now);assert.equal(g.players[1].status,'active');assert.throws(()=>act(g,'a','tag',{target:'b'},fixes,now+100));const id=g.tags[0].id;assert.throws(()=>act(g,'a','respondTag',{tag:id,confirm:true},fixes,now+1000));act(g,'b','respondTag',{tag:id,confirm:true},fixes,now+1000);assert.equal(g.phase,'results');assert.equal(g.winner,'hunters')});
+test('distant or inaccurate positions cannot request tags',()=>{assert.throws(()=>act(running(),'a','tag',{target:'b'},{...fixes,b:fix({lng:76})},now));assert.throws(()=>act(running(),'a','tag',{target:'b'},{...fixes,b:fix({accuracy:51})},now))});
+test('dispute preserves player and host cannot force confirmation',()=>{const g=running();act(g,'a','tag',{target:'b'},fixes,now);act(g,'b','respondTag',{tag:g.tags[0].id,confirm:false},fixes,now+1);assert.equal(g.players[1].status,'active');act(g,'a','dismissTag',{tag:g.tags[0].id},fixes,now+2);assert.equal(g.tags[0].status,'dismissed')});
+test('pause freezes timers and resume shifts authoritative deadlines',()=>{const g=running(),end=g.endsAt;act(g,'b','pause',{},fixes,now);advance(g,{},now+30000);assert.equal(g.phase,'paused');assert.throws(()=>act(g,'b','resume',{},fixes,now+30000));act(g,'a','resume',{},fixes,now+30000);assert.equal(g.endsAt,end+30000)});
+test('clock expiry grants shadows victory on reconnect',()=>{const g=running();advance(g,{},g.endsAt+1);assert.equal(g.winner,'shadows')});
+test('abilities enforce role and cooldown',()=>{const g=running();act(g,'b','ability',{},fixes,now);assert.equal(g.players[1].ghostUntil,now+30000);assert.throws(()=>act(g,'b','ability',{},fixes,now+1))});
+test('serialization contains only caller fix; no other private fix',()=>{const g=running();const s=publicSnapshot(g,'a',{a:fix(),b:fix({lng:75.9345712345})},{},now,1);assert.equal(s.ownFix?.lng,fix().lng);assert.ok(!JSON.stringify(s).includes('75.9345712345'));assert.ok(!('processed'in s));});
+test('host leaving ends match safely; last hunter leaving grants shadows win',()=>{const g=running();act(g,'a','leave',{},fixes,now);assert.equal(g.winner,'aborted');const h=running();h.hostId='b';act(h,'a','leave',{},fixes,now);assert.equal(h.winner,'shadows')});

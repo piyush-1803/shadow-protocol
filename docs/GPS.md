@@ -1,0 +1,15 @@
+# GPS, uncertainty and device behavior
+
+`watchPosition` uses `{enableHighAccuracy:true, maximumAge:0, timeout:10000}` after explicit consent. High accuracy is a request, not a guarantee. The latest latitude, longitude, accuracy, device timestamp, receipt timestamp, optional speed and heading are retained. Connection and presence are independent of GPS freshness.
+
+Confidence defaults: ≤10 m high; ≤25 m medium; ≤50 m low; >50 m unreliable. Readiness, tags and radar require a ≤50 m non-flagged fix received within 15 seconds. Device timestamps older than 15 seconds, over 5 seconds in the future or non-monotonic are rejected. A badly configured device clock may need correction. No fabricated fallback coordinates exist. The initial NIT Calicut map center is a clearly labeled browsing location, not the user's position.
+
+The client applies mild accuracy-weighted smoothing for small changes only. It follows the raw sample directly after a long gap, a large jump or a flag. The server receives **raw** readings; display smoothing never changes a tag or zone decision. The accuracy circle is reported uncertainty, not a certified containment bound. The SVG/raster fallback shows stale samples in gray; the HUD marks freshness independently.
+
+Movement above 12 m/s after subtracting both uncertainty radii is flagged as a possible jump/spoof. This threshold allows false positives and is not an accusation. Subsequent credible readings restore participation. Repeated timestamps are rejected, not treated as sufficient evidence of cheating. There is no automatic kick/elimination for GPS loss.
+
+Tag distance defaults to 15 m and can be configured from 5–25 m. The backend first checks that the measured separation is no larger than tag distance plus both accuracy radii; that is only a plausibility check. The Shadow must explicitly confirm proximity. It does not claim GPS proves a 15 m distance. Requests expire after 30 seconds and successful requests impose a 10-second hunter cooldown. A disputed tag leaves the player active and can only be dismissed by the host; the host cannot force a disputed elimination.
+
+When the page becomes hidden, it stops its GPS watch and requests sharing revocation. Returning does not automatically restart it. Screen-lock behavior varies; no continuous background tracking or wake-lock guarantee is made. The emergency stop immediately clears the watch even without network. The last uploaded fix becomes gameplay-stale after 15 seconds, expires after 60 seconds, and is physically deleted on the next API request (or immediately when the stop request succeeds). Any already delivered radar signal remains visible until its 12-second expiry on other clients.
+
+Physical validation still required: two or more actual phones outdoors, mid-range Android Chromium, iPhone Safari, permission denial/revocation, stationary drift, screen lock, battery saver, poor LTE, Wi-Fi transitions, accessibility zoom and long sessions. The included synthetic GPS tests do not replace these checks.

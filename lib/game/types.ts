@@ -1,0 +1,10 @@
+export type Coord = [number,number];
+export type Fix = {lng:number;lat:number;accuracy:number;timestamp:number;receivedAt:number;speed:number|null;heading:number|null;flag?:string};
+export type Arena = {center:Coord;radius:number;boundary:Coord[];exclusions:Coord[][];approved:boolean};
+export type Settings = {duration:number;headStart:number;radarInterval:number;shrinkInterval:number;hunters:number;maxPlayers:number;tagDistance:number;abilities:boolean};
+export type Player = {id:string;name:string;ready:boolean;role:'hunter'|'shadow'|null;status:'active'|'tagged'|'left';ghostUntil:number;abilityAt:number;lastTag:number;exposure:number;outsideSince:number|null;flags:number};
+export type Signal = {id:string;center:Coord;radius:number;expiresAt:number;kind:'signal'};
+export type Tag = {id:string;hunter:string;shadow:string;createdAt:number;status:'pending'|'confirmed'|'disputed'|'dismissed'|'expired'};
+export type Game = {id:string;code:string;name:string;hostId:string;arena:Arena;settings:Settings;players:Player[];phase:'lobby'|'headstart'|'hunt'|'collapse'|'final'|'paused'|'results';startedAt:number;endsAt:number;pausedAt:number;previousPhase?:Game['phase'];lastTick:number;nextRadar:number;radar:Signal[];tags:Tag[];zone:{from:number;to:number;start:number;end:number;step:number};zoneApproved:boolean;winner:'hunters'|'shadows'|'aborted'|null;events:{at:number;text:string}[];processed:string[]};
+export type Snapshot = Omit<Game,'processed'> & {me:string;serverTime:number;revision:number;presence:Record<string,{seenAt:number;sharing:boolean;gps:'fresh'|'stale'|'unavailable';accuracy:number|null}>;ownFix:Fix|null};
+export const defaults:Settings={duration:1200,headStart:60,radarInterval:180,shrinkInterval:240,hunters:1,maxPlayers:12,tagDistance:15,abilities:true};
